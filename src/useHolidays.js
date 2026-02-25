@@ -4,10 +4,17 @@ import { REGIONS } from './regions';
 const API_BASE = 'https://date.nager.at/api/v3/PublicHolidays';
 const cache = {};
 
+// country code → { regionId, countryName, nameKo }
+const countryMeta = {};
+REGIONS.forEach((r) => {
+  r.countries.forEach((c) => {
+    countryMeta[c.code] = { regionId: r.id, countryName: c.name, nameKo: c.nameKo };
+  });
+});
+
 async function fetchHolidaysForCountry(year, countryCode) {
   const key = `${year}-${countryCode}`;
   if (cache[key]) return cache[key];
-
   const res = await fetch(`${API_BASE}/${year}/${countryCode}`);
   if (!res.ok) return [];
   const data = await res.json();
@@ -15,28 +22,25 @@ async function fetchHolidaysForCountry(year, countryCode) {
   return data;
 }
 
-export function useHolidays(year, activeRegionIds) {
-  const [holidays, setHolidays] = useState({}); // { 'YYYY-MM-DD': [{name, countryCode, regionId, ...}] }
+export function useHolidays(year, activeCountryCodes) {
+  const [holidays, setHolidays] = useState({});
   const [loading, setLoading] = useState(false);
 
   const fetchAll = useCallback(async () => {
-    if (activeRegionIds.length === 0) {
+    if (activeCountryCodes.length === 0) {
       setHolidays({});
       return;
     }
     setLoading(true);
 
-    const activeRegions = REGIONS.filter((r) => activeRegionIds.includes(r.id));
-    const countryCodes = activeRegions.flatMap((r) =>
-      r.countries.map((c) => ({ ...c, regionId: r.id }))
-    );
-
     const results = await Promise.allSettled(
-      countryCodes.map(async ({ code, name, regionId }) => {
+      activeCountryCodes.map(async (code) => {
+        const meta = countryMeta[code];
+        if (!meta) return [];
         const data = await fetchHolidaysForCountry(year, code);
         return data
-          .filter((h) => h.global === true) // nationwide holidays only
-          .map((h) => ({ ...h, countryCode: code, countryName: name, regionId }));
+          .filter((h) => h.global === true)
+          .map((h) => ({ ...h, countryCode: code, countryName: meta.countryName, regionId: meta.regionId }));
       })
     );
 
@@ -44,7 +48,7 @@ export function useHolidays(year, activeRegionIds) {
     results.forEach((r) => {
       if (r.status !== 'fulfilled') return;
       r.value.forEach((h) => {
-        const date = h.date; // 'YYYY-MM-DD'
+        const date = h.date;
         if (!merged[date]) merged[date] = [];
         merged[date].push(h);
       });
@@ -52,7 +56,7 @@ export function useHolidays(year, activeRegionIds) {
 
     setHolidays(merged);
     setLoading(false);
-  }, [year, activeRegionIds.join(',')]); // eslint-disable-line
+  }, [year, activeCountryCodes.join(',')]); // eslint-disable-line
 
   useEffect(() => {
     fetchAll();
